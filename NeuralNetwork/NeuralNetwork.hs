@@ -7,26 +7,16 @@ module NeuralNetwork (
   feedForwardP,
   initiateNetwork,
   trainOne,
-  toVector) where
+  backpropagation) where
 
+import Internals
+import Data.Foldable
 import Data.Array.Repa.Algorithms.Matrix
 import Data.Array.Repa.Algorithms.Randomish
 import Data.Array.Repa as R hiding ((++))
-import Data.Foldable
-
--- | -------------------------------
--- | Data and types
--- | -------------------------------
-data NeuralNetwork = FFNN WeightsAndBiases ActivationFunction
-
-type WeightsAndBiases = [(Array U DIM2 Double)]
--- | First is the standard activation, the second is the derivative
-data ActivationFunction = Activation (Double -> Double) (Double -> Double)
-
-instance Show NeuralNetwork where
-  show (FFNN weights activation) = show weights
-
-learningRate = 0.5
+import System.Random
+import Data.Array.IO
+import Control.Monad
 
 sigmoid :: ActivationFunction
 sigmoid = Activation (\x -> 1.0 / (1.0 + exp( -x ))) (\x -> x * (1.0 - x))
@@ -34,6 +24,28 @@ sigmoid = Activation (\x -> 1.0 / (1.0 + exp( -x ))) (\x -> x * (1.0 - x))
 -- | Helpers
 layers :: NeuralNetwork -> Int
 layers (FFNN network _) = (length network) `div` 2
+
+backpropagation :: NeuralNetwork -> [[Double]] -> [[Double]] -> IO NeuralNetwork
+backpropagation network input target = do
+    let tuple = zip input $ Prelude.map toVector target
+    inputOutput <- shuffle tuple
+    foldrM (\(a,b) -> \net -> trainOne a b net) network inputOutput
+
+-- | Randomly shuffle a list
+--   /O(N)/
+shuffle :: [a] -> IO [a]
+shuffle xs = do
+        ar <- newArray n xs
+        forM [1..n] $ \i -> do
+            j <- randomRIO (i,n)
+            vi <- readArray ar i
+            vj <- readArray ar j
+            writeArray ar j vi
+            return vj
+      where
+        n = length xs
+        newArray :: Int -> [a] -> IO (IOArray Int a)
+        newArray n xs =  newListArray (1,n) xs
 
 -- | Train a network by backpropagation
 trainOne :: [Double] -> Array U DIM2 Double -> NeuralNetwork -> IO NeuralNetwork
@@ -47,7 +59,6 @@ trainOne input target network@(FFNN weights act@(Activation f df)) = do
           | index == (layers network)-1 = do
               initialOutput <- ((weights !! (index*2)) `mmultP` input)
               let output = applyActivation $ addBias initialOutput index
-              --print $ computeUnboxedS output
               let dOdN   = R.map df output
               let err = R.zipWith (\x -> \y -> -(x-y)) target output
               delta <- computeUnboxedP $ R.zipWith (*) dOdN err
@@ -111,3 +122,8 @@ initiateNetwork nodesInLayers activation seed = FFNN generateWeights activation
         generateBias index  =
           let x = nodesInLayers !! index in
           (randomishDoubleArray (Z :. x :. (1 :: Int)) (-1.0) 1.0 (seed*47*(index+1)))
+
+test = do
+  seed <- randomRIO(1,1000)
+  net <- backpropagation (initiateNetwork [2,2,2,2,2] sigmoid seed) (replicate 10000 [0.5,0.1]) (replicate 10000 [0.01,0.99])
+  feedForwardP [0.5,0.1] net
